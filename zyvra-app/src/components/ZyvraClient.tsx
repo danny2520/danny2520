@@ -157,7 +157,7 @@ export default function ZyvraClient() {
     if (authBusy) return;
     setAuthBusy(true);
     try {
-      const result = await api<{ user: User }>(
+      const result = await api<{ user: User; verificationEmailSent?: boolean }>(
         "/api/auth/" + (authMode === "register" ? "register" : "login"),
         "POST",
         authMode === "register" ?
@@ -167,6 +167,9 @@ export default function ZyvraClient() {
       setUser(result.user);
       setAuthPassword("");
       setTab("home");
+      if(authMode==="register" && result.verificationEmailSent===false){
+        setGateMessage("Your account was created, but the verification email was not delivered. Use Resend email to try again.");
+      } else setGateMessage("");
       notice(result.user.verified ? "Welcome to ZYVRA ✦" : "Check your email to verify your account");
     } catch (error) {
       notice(error instanceof Error ? error.message : "Could not sign in");

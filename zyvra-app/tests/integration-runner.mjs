@@ -248,6 +248,29 @@ test("four isolated accounts: verification, moderation, blocking, privacy, delet
     assert.equal(aliceExists.rows.length,0);
     const mediaJob=await pool.query("SELECT url FROM zyvra_media_cleanup WHERE url=$1",["https://example.invalid/alice-photo.jpg"]);
     assert.equal(mediaJob.rows.length,1,"Cascaded account deletion must queue media cleanup");
+    const expiryImage=await pool.query(
+      "SELECT m.id,m.url FROM zyvra_media m WHERE m.url=$1",
+      ["https://example.invalid/alice-story.png"]
+    );
+    // Alice's media has already been deleted by account erasure. Create
+    // a new disposable story photo owned by the surviving moderator.
+    const cleanupMedia=await pool.query(
+      "INSERT INTO zyvra_media(owner_id,url,pathname,kind,content_type,size_bytes,created_at) " +
+      "VALUES($1,$2,$3,'image','image/png',14000,now()-interval '3 days') RETURNING id",
+      [mod.user.id,"https://example.invalid/expired-photo.png","zyvra/"+mod.user.id+"/stories/expired-photo.png"]
+    );
+    const oldStory=await pool.query(
+      "INSERT INTO zyvra_stories(author_id,body,media_id,created_at,expires_at) " +
+      "VALUES($1,'old story',$2,now()-interval '2 days',now()-interval '1 day') RETURNING id",
+      [mod.user.id,cleanupMedia.rows[0].id]
+    );
+    assert.equal((await send("/api/moderation/cleanup",{method:"POST",cookie:bob.cookie})).status,403);
+    const cleaned=await send("/api/moderation/cleanup",{method:"POST",cookie:mod.cookie});
+    assert.equal(cleaned.status,200,JSON.stringify(cleaned.body));
+    assert.ok(cleaned.body.expiredStories>=1);
+    assert.ok(cleaned.body.prunedMedia>=1);
+    assert.equal((await pool.query("SELECT id FROM zyvra_stories WHERE id=$1",[oldStory.rows[0].id])).rows.length,0);
+    assert.equal((await pool.query("SELECT url FROM zyvra_media_cleanup WHERE url=$1",["https://example.invalid/expired-photo.png"])).rows.length,1);
     assert.equal((await send("/api/maintenance/cleanup")).status,503,"Cron must fail closed when unconfigured");
     console.log("PASS: email verification, account flows, media ownership, reports, moderator actions, blocking, account erasure and Blob outbox");
   } finally {

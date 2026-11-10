@@ -6,7 +6,7 @@ function VerifyContent(){
   const params=useSearchParams();
   const [status,setStatus]=useState("Checking your verification link...");
   const [ok,setOk]=useState(false);
-  const token=params.get("token");
+  const [token]=useState(()=>params.get("token"));
   useEffect(()=>{
     window.history.replaceState(null,"","/verify");
     if(!token){setStatus("Missing verification token.");return;}
