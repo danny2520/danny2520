@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requiredUser } from "@/lib/auth";
 import { sql } from "@/lib/db";
+import { assertCanContact } from "@/lib/safety";
 import { ApiError, asRoute, assertSameOrigin, uuid } from "@/lib/http";
 
 type Context = { params: Promise<{ id: string }> };
@@ -11,8 +12,7 @@ export async function POST(request: NextRequest, context: Context) {
     const me = await requiredUser();
     const targetId = uuid((await context.params).id);
     if (targetId === me.id) throw new ApiError(400, "You cannot follow yourself");
-    const users = await sql("SELECT id FROM zyvra_users WHERE id=$1 LIMIT 1", [targetId]);
-    if (!users.length) throw new ApiError(404, "User not found");
+    await assertCanContact(me.id,targetId);
     await sql("INSERT INTO zyvra_follows(follower_id,following_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [me.id, targetId]);
     return NextResponse.json({ following: true });
   });

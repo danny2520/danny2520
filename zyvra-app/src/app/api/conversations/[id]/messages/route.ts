@@ -6,7 +6,13 @@ import { ApiError, asRoute, assertSameOrigin, inputText, payload, uuid } from "@
 type Context = { params: Promise<{ id: string }> };
 async function authorizedConversation(conversationId: string, userId: string) {
   const rows = await sql(
-    "SELECT 1 FROM zyvra_conversation_members WHERE conversation_id = $1 AND user_id = $2 LIMIT 1",
+    "SELECT 1 FROM zyvra_conversation_members mine " +
+    "JOIN zyvra_conversation_members peer ON peer.conversation_id=mine.conversation_id AND peer.user_id<>$2 " +
+    "JOIN zyvra_users u ON u.id=peer.user_id AND u.account_state='active' " +
+    "WHERE mine.conversation_id=$1 AND mine.user_id=$2 " +
+    "AND NOT EXISTS(SELECT 1 FROM zyvra_blocks b WHERE " +
+    "(b.blocker_id=$2 AND b.blocked_id=peer.user_id) OR " +
+    "(b.blocker_id=peer.user_id AND b.blocked_id=$2)) LIMIT 1",
     [conversationId, userId]
   );
   if (!rows.length) throw new ApiError(404, "Conversation not found");

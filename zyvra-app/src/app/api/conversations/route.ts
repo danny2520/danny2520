@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requiredUser } from "@/lib/auth";
 import { sql, transaction } from "@/lib/db";
+import { assertCanContact } from "@/lib/safety";
 import { ApiError, asRoute, assertSameOrigin, payload, uuid } from "@/lib/http";
 
 export async function GET() {
@@ -15,7 +16,10 @@ export async function GET() {
       "JOIN zyvra_conversations c ON c.id = mine.conversation_id " +
       "JOIN zyvra_conversation_members them ON them.conversation_id = c.id AND them.user_id <> $1 " +
       "JOIN zyvra_users peer ON peer.id = them.user_id " +
-      "WHERE mine.user_id = $1 ORDER BY last_at DESC NULLS LAST, c.created_at DESC LIMIT 100",
+      "WHERE mine.user_id=$1 AND peer.account_state='active' " +
+      "AND NOT EXISTS(SELECT 1 FROM zyvra_blocks b WHERE " +
+      "(b.blocker_id=$1 AND b.blocked_id=peer.id) OR (b.blocker_id=peer.id AND b.blocked_id=$1)) " +
+      "ORDER BY last_at DESC NULLS LAST, c.created_at DESC LIMIT 100",
       [me.id]
     );
     return NextResponse.json({ conversations });
@@ -27,7 +31,7 @@ export async function POST(request: NextRequest) {
     const me = await requiredUser();
     const data = await payload(request);
     const recipientId = uuid(String(data.recipientId ?? ""));
-    if (recipientId === me.id) throw new ApiError(400, "You cannot message yourself");
+    await assertCanContact(me.id,recipientId);
     const key = [me.id, recipientId].sort().join(":");
     const id = await transaction(async client => {
       const target = await client.query("SELECT id FROM zyvra_users WHERE id = $1", [recipientId]);

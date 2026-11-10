@@ -10,7 +10,10 @@ export async function GET(request: NextRequest) {
     const users = await sql(
       "SELECT u.id, u.handle, u.display_name, u.bio, " +
       "EXISTS(SELECT 1 FROM zyvra_follows f WHERE f.follower_id=$1 AND f.following_id=u.id) AS following " +
-      "FROM zyvra_users u WHERE u.id <> $1 AND (u.handle ILIKE $2 OR u.display_name ILIKE $2) " +
+      "FROM zyvra_users u WHERE u.id <> $1 AND u.account_state='active' AND u.email_verified_at IS NOT NULL " +
+      "AND NOT EXISTS(SELECT 1 FROM zyvra_blocks b WHERE " +
+      "(b.blocker_id=$1 AND b.blocked_id=u.id) OR (b.blocker_id=u.id AND b.blocked_id=$1)) " +
+      "AND (u.handle ILIKE $2 OR u.display_name ILIKE $2) " +
       "ORDER BY u.handle ASC LIMIT 15",
       [me.id, "%" + search.replace(/[%_\\]/g, "\\$&") + "%"]
     );
