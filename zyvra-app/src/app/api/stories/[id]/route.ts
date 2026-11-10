@@ -8,7 +8,8 @@ export async function DELETE(request:NextRequest,context:Context){
     assertSameOrigin(request);
     const me=await requiredUser();
     const storyId=uuid((await context.params).id);
-    await sql("DELETE FROM zyvra_stories WHERE id=$1 AND author_id=$2",[storyId,me.id]);
+    const deleted=await sql("DELETE FROM zyvra_stories WHERE id=$1 AND author_id=$2 RETURNING id",[storyId,me.id]);
+    if (!deleted.length) return NextResponse.json({error:"Story not found"},{status:404});
     return NextResponse.json({deleted:true});
   });
 }

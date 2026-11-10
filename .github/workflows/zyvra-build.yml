@@ -1,4 +1,4 @@
-name: ZYVRA - Typecheck and Build
+name: ZYVRA - Typecheck, Build and Integration
 on:
   push:
     branches:
@@ -12,11 +12,31 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: zyvra_ci
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: zyvra_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U zyvra_ci -d zyvra_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Disposable CI-only database and test-only key. Never use Neon project secrets here.
+      DATABASE_URL: postgresql://zyvra_ci:ci_only_password@127.0.0.1:5432/zyvra_ci
+      AUTH_SECRET: CI_ONLY_FIXED_RANDOM_TEST_SECRET_NOT_FOR_REAL_USE_0123456789abcdefghijklmnopqrstuvwxyz
     defaults:
       run:
         working-directory: zyvra-app
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -28,3 +48,5 @@ jobs:
         run: npm test
       - name: Build Next.js
         run: npm run build
+      - name: Exercise two-account social and messaging flows (isolated PostgreSQL)
+        run: npm run test:integration
