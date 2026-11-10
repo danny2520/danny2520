@@ -1,49 +1,54 @@
-# ZYVRA · Phase 2 live social foundation
+# ZYVRA · Phase 4 early-access social platform
 
-**Your people. Your pulse.** ZYVRA is an original social platform concept with a functional PostgreSQL-backed early-access application.
+**Your people. Your pulse.** Original Next.js + PostgreSQL social application with a responsive interface, user accounts, posts, direct messages, following, bookmarks, stories, photo posts and a vertical Clips experience.
 
-## Current capabilities
-- Create accounts with bcrypt-hashed passwords; sign in and sign out using opaque, hashed server-side session tokens.
-- Compose text posts and see a shared feed, like and reply.
-- Search for members and start private 1-to-1 chats (only chat members can retrieve or send messages).
-- Responsive dark mobile/desktop interface, plus the original standalone visual demo under /preview/index.html.
-- PostgreSQL persisted auth attempt throttling and secure httpOnly session cookies. Data is not stored in localStorage in the live application.
+## Working features
+- User accounts, bcrypt password hashes and httpOnly database-backed sessions.
+- Shared text/photo/video feed with likes, comments and private saved posts.
+- User search, following and personalized Following feed.
+- Direct messages restricted to conversation members; visible conversations refresh every 8 seconds, not in hidden tabs.
+- 24-hour text and photo stories. **Stories expire from the feed after 24 hours; the public Blob file itself is not automatically deleted yet. Do not post sensitive story photos.**
+- Clips feed for MP4/WebM videos. The visible video can play muted and pauses when offscreen or when the browser tab is hidden.
+- Public Vercel Blob media uploads via direct browser-to-Blob transfer; Neon stores only metadata. Private login checks, owner-only attachments, database ownership constraints and a 12/day upload-token quota (3 video tokens per 24 hours).
+- JPEG, PNG and WebP images up to **5 MB**; MP4 and WebM videos up to **25 MB**.
+- A standalone visual demo remains at /preview/index.html, separate from the real database-backed app.
 
-**What is not live yet:** photo/video upload, Snap-style stories, clips, push notifications, following, realtime WebSockets, moderation/reporting, password reset/email verification, production observability and automated content safety. Messaging currently refreshes every 8 seconds while the chat is visible, not while hidden.
+## Deployment status
+- Vercel project: zyvra-social, under team dan-1650.
+- Protected feature-branch previews; Vercel Authentication is enabled.
+- Isolated Neon database: zyvra-development / zyvra_dev. Automatic suspension on idle.
+- Vercel Blob store: zyvra-early-access-media (**public access**).
+- The CI integration suite runs against a disposable local PostgreSQL instance, **never the Neon database**.
+- CI covers accounts, post creation, likes, replies, two-way messages and authorization, follows, bookmarks, expiring stories, media attachment ownership, feed media metadata and Clips queries.
+- **A real browser-to-Blob binary upload is not covered by CI and must be manually tested on the protected preview.** Vercel Authentication can block Blob's optional callback; the app uses a separate authenticated media-finalization endpoint and does not depend on the callback to create post records.
 
-## Local setup (Ubuntu + VS Code)
-1. Create a **dedicated development database**. Do NOT reuse any existing company's database.
-2. In this directory, run:
-   - npm install
-   - cp .env.example .env.local
-   - Fill in DATABASE_URL and a randomly generated AUTH_SECRET (at least 32 characters) in .env.local
-3. Apply the **non-destructive, initial schema** once to your dedicated dev database:
-   - First load DATABASE_URL into your terminal from .env.local (the Next.js dev server loads .env.local automatically, but psql does not):
-   - export DATABASE_URL="$(sed -n 's/^DATABASE_URL=//p' .env.local | sed 's/^"//;s/"$//')"
+## Ubuntu + VS Code local setup
+1. Clone an isolated copy; do not reuse an existing project or company database.
+2. From the zyvra-app directory, run npm install, then copy .env.example to .env.local.
+3. Fill in DATABASE_URL and AUTH_SECRET in .env.local. Generate the secret with openssl rand -hex 48.
+4. For uploads locally, obtain the ZYVRA Blob token via Vercel dashboard; never commit or share it.
+5. Run these migrations in order against **only** your dedicated development database, with DATABASE_URL loaded in the terminal:
    - psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/001_initial.sql
-   - unset DATABASE_URL
-   - If psql isn't present: sudo apt install postgresql-client
-4. Run:
-   - npm run typecheck
-   - npm test
-   - npm run build
-   - npm run dev
-5. Open http://localhost:3000. Sign up two test users in two separate browsers and send messages to test two-way chat.
+   - psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/002_social_graph_and_stories.sql
+   - psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/003_media.sql
+   - Existing ZYVRA Neon development has all three migrations. **Do not apply them there again.**
+6. Run npm run typecheck, npm test, npm run build, and npm run dev.
+7. Open localhost port 3000 and use separate browser sessions to test messaging.
 
-**Neon**: use a dedicated dev branch/project with the pooler connection string for runtime and a direct connection for one-time schema setup. In Vercel, configure DATABASE_URL and AUTH_SECRET in project environment variables; never commit .env.local. Do not run migrations from the build command.
+## Media security and limitations
+- Uploads require an authenticated account. The server checks each user's path prefix, content type, maximum file size and daily token quota. During finalization the server independently verifies the Blob object instead of trusting a URL supplied by the browser.
+- Posts/stories can attach only media owned by the author. A PostgreSQL composite foreign key also enforces ownership.
+- Media files and URLs are **publicly accessible**. Do not upload confidential photos, documents or secrets.
+- Quotas limit token issuance; abandoned uploads can still consume storage. Media cleanup, retention/deletion, moderation, abuse reporting, copyright handling, video transcoding, real MIME inspection and safer access policies must be added before public release.
+- Only compatible MP4/WebM files will play as Clips; no video transcoding or generated thumbnails yet.
+- No email verification, password recovery, admin moderation, blocking, private-account settings, account deletion or push notifications yet.
+- Direct messages are access controlled but **not end-to-end encrypted**.
+- Do not open public registration until moderation, safety and data-deletion workflows are ready.
 
-## Architecture
-- Next.js App Router, React, PostgreSQL/pg, bcryptjs, Node crypto.
-- Route handlers under src/app/api. Sensitive endpoints check the authenticated session, request origin and JSON validation.
-- Users, posts, likes, comments, conversations, conversation memberships, messages and sessions use parameterized SQL queries.
-- The database maintains a membership foreign key for message senders and user-specific authorization on message reads.
-- A simple API-first setup keeps server logic separate from UI. Account data is never trusted from browser-supplied user IDs.
-- Session tokens never appear in API JSON payloads.
+## Repository
+Development code is temporarily in public danny2520/danny2520 on feat/zyvra-social-foundation, in folder zyvra-app. GitHub main is unchanged. Move this app to its own private zyvra-social repository before public hosting.
 
-## Important constraints
-This is **an early-access development foundation**. It is not a production-ready social network. Before opening public registration, implement email verification, password recovery, abuse prevention, privacy controls, moderation, account deletion, media safety, monitoring, privacy policy and adequate load testing. The initial database schema has not been applied by these code commits.
-
-The original UI demo still runs locally in the browser without real accounts. It is intentionally labeled as a visual preview.
-
-## Repository note
-This folder is staged on the isolated GitHub branch feat/zyvra-social-foundation, inside danny2520/danny2520, because the connected GitHub tools could not create the intended separate private repository. Move this directory into a new dedicated private repo before production hosting. Keep the original profile main branch unchanged.
+## Tests
+- npm test: static security/contract checks.
+- npm run test:integration: requires a disposable PostgreSQL database named zyvra_ci on 127.0.0.1, **not Neon**.
+- GitHub Actions uses a disposable PostgreSQL 17 service, applies the three migrations, builds the application and checks account/media/DM authorization without requiring Blob credentials.
