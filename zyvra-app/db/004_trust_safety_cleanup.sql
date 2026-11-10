@@ -69,7 +69,6 @@ BEGIN
   RETURN OLD;
 END;
 $$ LANGUAGE plpgsql;
-DROP TRIGGER IF EXISTS zyvra_media_delete_outbox ON zyvra_media;
-CREATE TRIGGER zyvra_media_delete_outbox
+CREATE OR REPLACE TRIGGER zyvra_media_delete_outbox
  AFTER DELETE ON zyvra_media FOR EACH ROW EXECUTE FUNCTION zyvra_queue_blob_cleanup();
 COMMIT;
