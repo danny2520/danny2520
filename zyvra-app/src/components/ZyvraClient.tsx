@@ -6,13 +6,14 @@ import {
   Compass, Heart, Home, LockKeyhole, LogOut, Menu, MessageCircle, MoreHorizontal,
   Plus, Search, Send, ShieldCheck, Sparkles, UserRound, Users, X, Zap
 } from "lucide-react";
+import Stories from "./Stories";
 
-type User = { id: string; handle: string; display_name: string; bio: string; created_at?: string };
-type Post = { id: string; author_id: string; body: string; created_at: string; handle: string; display_name: string; like_count: number; comment_count: number; liked: boolean };
+type User = { id: string; handle: string; display_name: string; bio: string; created_at?: string; following?: boolean };
+type Post = { id: string; author_id: string; body: string; created_at: string; handle: string; display_name: string; like_count: number; comment_count: number; liked: boolean; bookmarked: boolean };
 type Comment = { id: string; body: string; created_at: string; handle: string; display_name: string };
 type Conversation = { id: string; peer_id: string; handle: string; display_name: string; last_message: string | null; last_at: string | null };
 type Message = { id: string; sender_id: string; body: string; created_at: string };
-type Tab = "home" | "explore" | "messages" | "profile";
+type Tab = "home" | "explore" | "messages" | "saved" | "profile";
 
 async function api<T>(path: string, method = "GET", data?: object): Promise<T> {
   const response = await fetch(path, {
@@ -75,9 +76,10 @@ export default function ZyvraClient() {
   const [toast, setToast] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [working, setWorking] = useState(false);
+  const [feedScope, setFeedScope] = useState<"all" | "following">("all");
 
-  const refreshPosts = useCallback(async () => {
-    const result = await api<{ posts: Post[] }>("/api/posts");
+  const refreshPosts = useCallback(async (scope: "all" | "following" | "saved" = "all") => {
+    const result = await api<{ posts: Post[] }>("/api/posts?scope=" + scope);
     setPosts(result.posts);
   }, []);
   const refreshConversations = useCallback(async () => {
@@ -103,9 +105,13 @@ export default function ZyvraClient() {
   }, [notice]);
   useEffect(() => {
     if (!user) return;
-    void refreshPosts().catch(err => notice(String(err.message)));
     void refreshConversations().catch(() => {});
-  }, [user, refreshPosts, refreshConversations, notice]);
+  }, [user, refreshConversations]);
+  useEffect(() => {
+    if (!user || (tab !== "home" && tab !== "saved" && tab !== "profile")) return;
+    const scope = tab === "saved" ? "saved" : tab === "home" ? feedScope : "all";
+    void refreshPosts(scope).catch(err => notice(String(err.message)));
+  }, [user, tab, feedScope, refreshPosts, notice]);
   useEffect(() => {
     if (!user || !conversationId || tab !== "messages") return;
     void refreshMessages(conversationId).catch(err => notice(String(err.message)));
@@ -122,6 +128,7 @@ export default function ZyvraClient() {
     { id: "home", text: "Home", icon: Home },
     { id: "explore", text: "Explore", icon: Compass },
     { id: "messages", text: "Messages", icon: MessageCircle },
+    { id: "saved", text: "Saved", icon: Bookmark },
     { id: "profile", text: "Profile", icon: UserRound }
   ] as const;
 
@@ -174,6 +181,26 @@ export default function ZyvraClient() {
       notice("Could not update like");
     }
   }
+  async function toggleBookmark(post: Post) {
+    setPosts(old => old.map(p => p.id === post.id ? { ...p, bookmarked: !p.bookmarked } : p));
+    try {
+      await api("/api/posts/" + post.id + "/bookmark", post.bookmarked ? "DELETE" : "POST");
+      if (tab === "saved") await refreshPosts("saved");
+    } catch {
+      setPosts(old => old.map(p => p.id === post.id ? { ...p, bookmarked: post.bookmarked } : p));
+      notice("Could not save this post");
+    }
+  }
+  async function toggleFollow(person: User) {
+    setPeople(old => old.map(p => p.id === person.id ? { ...p, following: !p.following } : p));
+    try {
+      await api("/api/users/" + person.id + "/follow", person.following ? "DELETE" : "POST");
+      notice(person.following ? "Unfollowed" : "You're now following @" + person.handle);
+    } catch {
+      setPeople(old => old.map(p => p.id === person.id ? { ...p, following: person.following } : p));
+      notice("Could not update follow status");
+    }
+  }
   async function expandComments(id: string) {
     if (id === expandedPostId) { setExpandedPostId(null); return; }
     setExpandedPostId(id); setComments([]); setCommentDraft("");
@@ -187,7 +214,7 @@ export default function ZyvraClient() {
       await api("/api/posts/" + id + "/comments", "POST", { body: commentDraft });
       setCommentDraft("");
       const result = await api<{ comments: Comment[] }>("/api/posts/" + id + "/comments");
-      setComments(result.comments); await refreshPosts();
+      setComments(result.comments); await refreshPosts(tab === "saved" ? "saved" : feedScope);
     } catch (error) { notice(error instanceof Error ? error.message : "Could not comment"); }
   }
   async function searchUsers(e: FormEvent<HTMLFormElement>) {
@@ -269,23 +296,25 @@ export default function ZyvraClient() {
     </aside>
     {menuOpen && <button type="button" aria-label="Close navigation" className="menu-backdrop" onClick={() => setMenuOpen(false)} />}
     <main className="content">
-      <header className="content-header"><button type="button" className="mobile-menu icon-btn" onClick={() => setMenuOpen(true)} aria-label="Open navigation"><Menu size={22}/></button><div><span className="header-kicker">WELCOME TO ZYVRA</span><h2>{tab === "home" ? "Your feed" : tab === "explore" ? "Find your people" : tab === "messages" ? "Messages" : "Your profile"}<span className="heading-dot">.</span></h2></div><span className="header-status"><span className="live-dot" /> Early access</span></header>
+      <header className="content-header"><button type="button" className="mobile-menu icon-btn" onClick={() => setMenuOpen(true)} aria-label="Open navigation"><Menu size={22}/></button><div><span className="header-kicker">WELCOME TO ZYVRA</span><h2>{tab === "home" ? "Your feed" : tab === "explore" ? "Find your people" : tab === "messages" ? "Messages" : tab === "saved" ? "Saved posts" : "Your profile"}<span className="heading-dot">.</span></h2></div><span className="header-status"><span className="live-dot" /> Early access</span></header>
       {tab === "home" && <>
         <div className="feed-heading"><div><span className="section-eyebrow">THE LATEST</span><h3>What's happening<span className="heading-dot">?</span></h3></div><span className="subtle-tag"><Sparkles size={15} /> For you</span></div>
         <form className="compose-card" onSubmit={createPost}><div className="compose-row"><Avatar name={user.display_name} /><textarea id="post-textarea" value={postDraft} onChange={e => setPostDraft(e.target.value)} maxLength={500} rows={3} placeholder="What's happening in your world?" aria-label="Write a post" /></div><div className="compose-footer"><span>Say it your way <span className="counter">{postDraft.length}/500</span></span><button type="submit" className="primary-btn small-btn" disabled={postBusy || !postDraft.trim()}>{postBusy ? "Posting..." : "Post"}<ArrowRight size={16}/></button></div></form>
-        <div className="stream-heading"><span><Zap size={18}/> Fresh on your feed</span><button type="button" onClick={() => void refreshPosts().catch(() => notice("Could not refresh"))}>Refresh</button></div>
+        <Stories currentUserId={user.id} />
+        <div className="stream-heading"><span><Zap size={18}/> Fresh on your feed</span><div className="feed-filters"><button type="button" className={feedScope === "all" ? "feed-scope-active" : ""} onClick={() => setFeedScope("all")}>Everyone</button><button type="button" className={feedScope === "following" ? "feed-scope-active" : ""} onClick={() => setFeedScope("following")}>Following</button><button type="button" aria-label="Refresh feed" onClick={() => void refreshPosts(feedScope).catch(() => notice("Could not refresh"))}>↻</button></div></div>
       </>}
       {tab === "profile" && <div className="profile-hero"><div className="profile-banner"><Zap size={55} fill="currentColor"/></div><div className="profile-detail"><Avatar name={user.display_name} size="large" /><span className="profile-label">FOUNDING MEMBER</span><h3>{user.display_name}</h3><span className="handle">@{user.handle}</span><p>{user.bio || "Express yourself. This is your space."}</p><div className="profile-stats"><strong>{myPosts.length}<span> Posts</span></strong><strong>✦<span> Early creator</span></strong></div></div><div className="posts-intro">Your posts</div></div>}
-      {(tab === "home" || tab === "profile") && <div className="post-stream">
+      {tab === "saved" && <div className="saved-header"><Bookmark size={23} /><div><span className="section-eyebrow">JUST FOR YOU</span><h3>Worth keeping.</h3><p>Only you can see your saved posts.</p></div></div>}
+      {(tab === "home" || tab === "profile" || tab === "saved") && <div className="post-stream">
         {showPosts.length === 0 && <div className="empty"><Sparkles size={28}/><h3>Every story starts somewhere.</h3><p>Share the first thought on your feed.</p></div>}
-        {showPosts.map(post => <article key={post.id} className="post"><div className="post-top"><Avatar name={post.display_name}/><div className="post-ident"><strong>{post.display_name}</strong><div><span>@{post.handle}</span><span>·</span><span>{friendlyTime(post.created_at)}</span></div></div><MoreHorizontal size={19} className="post-more"/></div><p className="post-copy">{post.body}</p><div className="post-actions"><button type="button" aria-label="Like post" aria-pressed={post.liked} className={post.liked ? "is-liked" : ""} onClick={() => void toggleLike(post)}><Heart size={19} fill={post.liked ? "currentColor" : "none"}/><span>{post.like_count}</span></button><button type="button" onClick={() => void expandComments(post.id)} aria-expanded={expandedPostId === post.id}><MessageCircle size={19}/><span>{post.comment_count}</span></button><span className="post-spacer"/><span className="post-type">TEXT POST</span></div>
+        {showPosts.map(post => <article key={post.id} className="post"><div className="post-top"><Avatar name={post.display_name}/><div className="post-ident"><strong>{post.display_name}</strong><div><span>@{post.handle}</span><span>·</span><span>{friendlyTime(post.created_at)}</span></div></div><MoreHorizontal size={19} className="post-more"/></div><p className="post-copy">{post.body}</p><div className="post-actions"><button type="button" aria-label="Like post" aria-pressed={post.liked} className={post.liked ? "is-liked" : ""} onClick={() => void toggleLike(post)}><Heart size={19} fill={post.liked ? "currentColor" : "none"}/><span>{post.like_count}</span></button><button type="button" onClick={() => void expandComments(post.id)} aria-expanded={expandedPostId === post.id}><MessageCircle size={19}/><span>{post.comment_count}</span></button><button type="button" onClick={() => void toggleBookmark(post)} className={post.bookmarked ? "is-saved" : ""} aria-pressed={post.bookmarked} aria-label={post.bookmarked ? "Unsave post" : "Save post"}><Bookmark size={19} fill={post.bookmarked ? "currentColor" : "none"}/></button><span className="post-spacer"/><span className="post-type">TEXT POST</span></div>
           {expandedPostId === post.id && <div className="comment-panel">{comments.map(comment => <div className="comment-item" key={comment.id}><Avatar name={comment.display_name} size="small"/><div><strong>{comment.display_name} <span>@{comment.handle}</span></strong><p>{comment.body}</p></div></div>)}{comments.length === 0 && <p className="no-comments">No replies yet. Start the conversation.</p>}<form className="comment-compose" onSubmit={e => void sendComment(e, post.id)}><input aria-label="Write a reply" placeholder="Reply to this post..." value={commentDraft} maxLength={300} onChange={e => setCommentDraft(e.target.value)}/><button type="submit" disabled={!commentDraft.trim()} aria-label="Send reply"><Send size={17}/></button></form></div>}
         </article>)}
       </div>}
-      {tab === "explore" && <section className="explore-page"><div className="explore-card"><span className="section-eyebrow">COMMUNITY</span><h3>Good people. Great conversations.</h3><p>Search for another member and start a one-to-one conversation. Your messages are only visible to members of that chat.</p><form className="people-search" onSubmit={searchUsers}><Search size={20}/><input aria-label="Search users" autoComplete="off" placeholder="Search by name or @username" value={peopleQuery} onChange={e => setPeopleQuery(e.target.value)} maxLength={50}/><button type="submit" className="primary-btn small-btn" disabled={searchBusy || peopleQuery.trim().length < 2}>{searchBusy ? "Searching" : "Find"}</button></form>{people.map(person => <div className="person-result" key={person.id}><Avatar name={person.display_name}/><div><strong>{person.display_name}</strong><span>@{person.handle}</span></div><button type="button" disabled={working} onClick={() => void openConversation(person.id)}><MessageCircle size={17}/> Message</button></div>)}{people.length === 0 && <div className="search-hint"><Users size={24}/> Find your first connection</div>}</div><div className="coming-soon"><span className="section-eyebrow">COMING NEXT</span><h3>Discover even more.</h3><p>Trending topics, creators, and communities are on our roadmap.</p><a href="/preview/index.html">Experience the visual concept <ArrowRight size={16}/></a></div></section>}
+      {tab === "explore" && <section className="explore-page"><div className="explore-card"><span className="section-eyebrow">COMMUNITY</span><h3>Good people. Great conversations.</h3><p>Search for another member and start a one-to-one conversation. Your messages are only visible to members of that chat.</p><form className="people-search" onSubmit={searchUsers}><Search size={20}/><input aria-label="Search users" autoComplete="off" placeholder="Search by name or @username" value={peopleQuery} onChange={e => setPeopleQuery(e.target.value)} maxLength={50}/><button type="submit" className="primary-btn small-btn" disabled={searchBusy || peopleQuery.trim().length < 2}>{searchBusy ? "Searching" : "Find"}</button></form>{people.map(person => <div className="person-result" key={person.id}><Avatar name={person.display_name}/><div><strong>{person.display_name}</strong><span>@{person.handle}</span></div><button type="button" className={person.following ? "person-following" : "person-follow"} onClick={() => void toggleFollow(person)}>{person.following ? <Check size={16}/> : <Plus size={16}/>} {person.following ? "Following" : "Follow"}</button><button type="button" disabled={working} onClick={() => void openConversation(person.id)}><MessageCircle size={17}/> Message</button></div>)}{people.length === 0 && <div className="search-hint"><Users size={24}/> Find your first connection</div>}</div><div className="coming-soon"><span className="section-eyebrow">COMING NEXT</span><h3>Discover even more.</h3><p>Trending topics, creators, and communities are on our roadmap.</p><a href="/preview/index.html">Experience the visual concept <ArrowRight size={16}/></a></div></section>}
       {tab === "messages" && <section className="message-page"><div className={"chat-list " + (conversationId ? "chat-list-mobile-hidden" : "")}><div className="chat-list-head"><h3>Inbox <span>{conversations.length}</span></h3><button type="button" aria-label="Find someone to message" title="New message" onClick={() => go("explore")}><Plus size={19}/></button></div>{conversations.length === 0 && <div className="chat-empty"><MessageCircle size={29}/><strong>Your inbox is ready.</strong><p>Find someone on Explore to send the first message.</p><button type="button" onClick={() => go("explore")}>Find people <ArrowRight size={15}/></button></div>}{conversations.map(c => <button key={c.id} type="button" className={"chat-item " + (conversationId === c.id ? "chat-selected" : "")} onClick={() => setConversationId(c.id)}><Avatar name={c.display_name}/><div><strong>{c.display_name}</strong><span>{c.last_message || "Start the conversation"}</span></div><small>{friendlyTime(c.last_at)}</small></button>)}</div><div className={"chat-panel " + (!conversationId ? "chat-panel-mobile-hidden" : "")}>{currentConversation && conversationId ? <><div className="chat-header"><button type="button" className="chat-back" aria-label="Return to chats" onClick={() => setConversationId(null)}><ArrowLeft size={20}/></button><Avatar name={currentConversation.display_name}/><div><strong>{currentConversation.display_name}</strong><span>@{currentConversation.handle} · Private conversation</span></div><LockKeyhole size={18} className="chat-lock"/></div><div className="chat-messages" aria-live="polite">{messages.length === 0 && <div className="first-message"><Sparkles size={28}/><h4>Say hello.</h4><p>A great connection starts with one message.</p></div>}{messages.map(message => <div key={message.id} className={"bubble-line " + (message.sender_id === user.id ? "mine" : "")}><div className="bubble"><p>{message.body}</p><small>{friendlyTime(message.created_at)} {message.sender_id === user.id && <Check size={12}/>}</small></div></div>)}</div><form className="chat-compose" onSubmit={submitMessage}><input aria-label="Write a message" placeholder="Write a message..." value={messageDraft} onChange={e => setMessageDraft(e.target.value)} maxLength={2000}/><button type="submit" disabled={messageBusy || !messageDraft.trim()} aria-label="Send message"><Send size={19}/></button></form></> : <div className="chat-placeholder"><span><MessageCircle size={35}/></span><h3>Your conversations start here.</h3><p>Select a chat or find someone to connect with.</p><button className="primary-btn small-btn" type="button" onClick={() => go("explore")}>Find people <ArrowRight size={16}/></button></div>}</div></section>}
     </main>
-    <aside className="right-sidebar"><div className="right-card right-welcome"><div className="right-topline"><span className="live-dot"/> YOUR SOCIAL UNIVERSE</div><div className="right-icon"><Sparkles size={25}/></div><h3>Better together.</h3><p>New thoughts, new friends and a thousand reasons to connect.</p><button type="button" onClick={() => go("explore")}>Explore the community <ArrowRight size={16}/></button></div><div className="right-card"><div className="right-label"><span>INSIDE ZYVRA</span><span>✦</span></div><div className="feature-info"><Heart size={18}/><span>Connect through posts</span><Check size={15}/></div><div className="feature-info"><MessageCircle size={18}/><span>Chat privately</span><Check size={15}/></div><div className="feature-info"><Clapperboard size={18}/><span>Clips & stories</span><span className="soon">SOON</span></div><div className="feature-info"><Bell size={18}/><span>Notifications</span><span className="soon">SOON</span></div></div><div className="right-footer">ZYVRA © 2026 <span>·</span> Built for connection.</div></aside>
+    <aside className="right-sidebar"><div className="right-card right-welcome"><div className="right-topline"><span className="live-dot"/> YOUR SOCIAL UNIVERSE</div><div className="right-icon"><Sparkles size={25}/></div><h3>Better together.</h3><p>New thoughts, new friends and a thousand reasons to connect.</p><button type="button" onClick={() => go("explore")}>Explore the community <ArrowRight size={16}/></button></div><div className="right-card"><div className="right-label"><span>INSIDE ZYVRA</span><span>✦</span></div><div className="feature-info"><Heart size={18}/><span>Connect through posts</span><Check size={15}/></div><div className="feature-info"><MessageCircle size={18}/><span>Chat privately</span><Check size={15}/></div><div className="feature-info"><Sparkles size={18}/><span>24-hour text stories</span><Check size={15}/></div><div className="feature-info"><Clapperboard size={18}/><span>Video clips</span><span className="soon">SOON</span></div><div className="feature-info"><Bell size={18}/><span>Notifications</span><span className="soon">SOON</span></div></div><div className="right-footer">ZYVRA © 2026 <span>·</span> Built for connection.</div></aside>
     <nav className="mobile-bottom" aria-label="Mobile navigation">{nav.map(({id,icon:Icon,text}) => <button type="button" key={id} onClick={() => go(id)} className={tab === id ? "active" : ""} aria-label={text}><Icon size={22}/><span>{text}</span></button>)}</nav>
     {toast && <div className="toast" role="status">{toast}<button type="button" aria-label="Dismiss notification" onClick={() => setToast("")}><X size={15}/></button></div>}
   </div>;
