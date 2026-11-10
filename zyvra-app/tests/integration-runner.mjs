@@ -24,7 +24,7 @@ test("three isolated accounts: authentication, posts, following, private saved p
   let server=null;
   let output="";
   try{
-    for(const file of ["001_initial.sql","002_social_graph_and_stories.sql"]){
+    for(const file of ["001_initial.sql","002_social_graph_and_stories.sql","003_media.sql"]){
       await pool.query(readFileSync(join(root,"db",file),"utf8"));
     }
     // Run the Next.js server directly: launching through npm can orphan a child
@@ -106,6 +106,46 @@ test("three isolated accounts: authentication, posts, following, private saved p
     await pool.query("UPDATE zyvra_stories SET created_at=now()-interval '2 days',expires_at=now()-interval '1 day' WHERE id=$1",[storyId]);
     assert.equal((await send("/api/stories",{cookie:bob.cookie})).body.stories.length,0);
 
+    // Media attachment tests use metadata fixtures in disposable PostgreSQL.
+    // The actual Vercel Blob binary upload will be tested manually on preview.
+    const photo=await pool.query(
+      "INSERT INTO zyvra_media(owner_id,url,pathname,kind,content_type,size_bytes) VALUES($1,$2,$3,'image','image/jpeg',10240) RETURNING id",
+      [alice.user.id,"https://example.invalid/alice-photo.jpg","zyvra/"+alice.user.id+"/posts/photo-001.jpg"]
+    );
+    const photoId=photo.rows[0].id;
+    assert.equal((await send("/api/posts",{method:"POST",cookie:bob.cookie,body:{body:"stolen photo",mediaId:photoId}})).status,403);
+    const photoPost=await send("/api/posts",{method:"POST",cookie:alice.cookie,body:{body:"Here's my picture",mediaId:photoId}});
+    assert.equal(photoPost.status,201,JSON.stringify(photoPost.body));
+    const gallery=await send("/api/posts",{cookie:bob.cookie});
+    assert.equal(gallery.body.posts.find(p=>p.id===photoPost.body.id).media_kind,"image");
+    assert.equal(gallery.body.posts.find(p=>p.id===photoPost.body.id).media_url,"https://example.invalid/alice-photo.jpg");
+    // Even direct database writes cannot attach Alice's media to Bob's post.
+    await assert.rejects(
+      pool.query("INSERT INTO zyvra_posts(author_id,body,media_id) VALUES($1,'cross-owner',$2)",[bob.user.id,photoId]),
+      error=>error.code==="23503"
+    );
+    const video=await pool.query(
+      "INSERT INTO zyvra_media(owner_id,url,pathname,kind,content_type,size_bytes) VALUES($1,$2,$3,'video','video/mp4',20480) RETURNING id",
+      [alice.user.id,"https://example.invalid/alice-video.mp4","zyvra/"+alice.user.id+"/posts/video-001.mp4"]
+    );
+    const clipPost=await send("/api/posts",{method:"POST",cookie:alice.cookie,body:{body:"Making something new",mediaId:video.rows[0].id}});
+    assert.equal(clipPost.status,201,JSON.stringify(clipPost.body));
+    const clips=await send("/api/posts?scope=clips",{cookie:bob.cookie});
+    assert.equal(clips.status,200);
+    assert.equal(clips.body.posts.length,1);
+    assert.equal(clips.body.posts[0].media_kind,"video");
+    assert.equal(clips.body.posts[0].id,clipPost.body.id);
+    const storyPhoto=await pool.query(
+      "INSERT INTO zyvra_media(owner_id,url,pathname,kind,content_type,size_bytes) VALUES($1,$2,$3,'image','image/png',12500) RETURNING id",
+      [alice.user.id,"https://example.invalid/alice-story.png","zyvra/"+alice.user.id+"/stories/story-001.png"]
+    );
+    assert.equal((await send("/api/stories",{method:"POST",cookie:bob.cookie,body:{body:"wrong owner",mediaId:storyPhoto.rows[0].id}})).status,403);
+    const storyWithPhoto=await send("/api/stories",{method:"POST",cookie:alice.cookie,body:{body:"My weekend!",mediaId:storyPhoto.rows[0].id}});
+    assert.equal(storyWithPhoto.status,201,JSON.stringify(storyWithPhoto.body));
+    const storyFeed=await send("/api/stories",{cookie:bob.cookie});
+    assert.equal(storyFeed.body.stories[0].media_url,"https://example.invalid/alice-story.png");
+    assert.equal(storyFeed.body.stories[0].media_kind,"image");
+
     // Bob opens a private thread, Alice replies, Eve cannot read or send.
     const opened=await send("/api/conversations",{method:"POST",cookie:bob.cookie,body:{recipientId:alice.user.id}});
     assert.equal(opened.status,201,JSON.stringify(opened.body));
@@ -125,7 +165,7 @@ test("three isolated accounts: authentication, posts, following, private saved p
     // Server-side logout invalidates existing bearer cookies immediately.
     assert.equal((await send("/api/auth/logout",{method:"POST",cookie:alice.cookie})).status,200);
     assert.equal((await send("/api/posts",{cookie:alice.cookie})).status,401);
-    console.log("PASS: accounts, posting, comments, likes, follows, private bookmarks, 24h stories, 2-way chat and access control");
+    console.log("PASS: accounts, posting, media ownership, Clips, comments, likes, follows, private bookmarks, stories, 2-way chat and access control");
   } finally {
     if(server?.pid)server.kill("SIGTERM");
     server?.stdout?.destroy();
