@@ -452,6 +452,6 @@ export default function ZyvraClient() {
         <div className="trust-row"><button type="button" className="trust-quiet" onClick={()=>setDeletePostId(null)}>Cancel</button>
           <button type="button" className="trust-danger-button" disabled={working} onClick={()=>void deleteOwnPost()}>Delete post</button></div>
       </section></div>}
-    {toast && <div className="toast" role="status">{toast}<button type="button" aria-label="Dismiss notification" onClick={() => setToast("")}><X size={15}/></button></div>
+    {toast && <div className="toast" role="status">{toast}<button type="button" aria-label="Dismiss notification" onClick={() => setToast("")}><X size={15}/></button></div>}
   </div>;
 }
