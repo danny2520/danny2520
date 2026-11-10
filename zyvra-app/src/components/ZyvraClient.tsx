@@ -4,16 +4,18 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import {
   ArrowLeft, ArrowRight, Bell, Bookmark, Check, ChevronRight, Clapperboard,
   Compass, Heart, Home, LockKeyhole, LogOut, Menu, MessageCircle, MoreHorizontal,
-  Plus, Search, Send, ShieldCheck, Sparkles, UserRound, Users, X, Zap
+  Plus, Search, Send, ShieldCheck, Sparkles, UserRound, Users, X, Zap, Image as ImageIcon, Film
 } from "lucide-react";
 import Stories from "./Stories";
+import ClipsFeed from "./ClipsFeed";
+import { sendMedia } from "@/lib/media-client";
 
 type User = { id: string; handle: string; display_name: string; bio: string; created_at?: string; following?: boolean };
-type Post = { id: string; author_id: string; body: string; created_at: string; handle: string; display_name: string; like_count: number; comment_count: number; liked: boolean; bookmarked: boolean };
+type Post = { id: string; author_id: string; body: string; created_at: string; handle: string; display_name: string; like_count: number; comment_count: number; liked: boolean; bookmarked: boolean; media_url: string | null; media_kind: "image" | "video" | null; media_type: string | null };
 type Comment = { id: string; body: string; created_at: string; handle: string; display_name: string };
 type Conversation = { id: string; peer_id: string; handle: string; display_name: string; last_message: string | null; last_at: string | null };
 type Message = { id: string; sender_id: string; body: string; created_at: string };
-type Tab = "home" | "explore" | "messages" | "saved" | "profile";
+type Tab = "home" | "explore" | "clips" | "messages" | "saved" | "profile";
 
 async function api<T>(path: string, method = "GET", data?: object): Promise<T> {
   const response = await fetch(path, {
@@ -62,6 +64,9 @@ export default function ZyvraClient() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [postDraft, setPostDraft] = useState("");
   const [postBusy, setPostBusy] = useState(false);
+  const [postMediaFile, setPostMediaFile] = useState<File | null>(null);
+  const [postPreview, setPostPreview] = useState<string | null>(null);
+  const [pendingMediaId, setPendingMediaId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -77,6 +82,12 @@ export default function ZyvraClient() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [working, setWorking] = useState(false);
   const [feedScope, setFeedScope] = useState<"all" | "following">("all");
+  useEffect(() => {
+    if (!postMediaFile || !postMediaFile.type.startsWith("image/")) { setPostPreview(null); return; }
+    const url = URL.createObjectURL(postMediaFile);
+    setPostPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [postMediaFile]);
 
   const refreshPosts = useCallback(async (scope: "all" | "following" | "saved" = "all") => {
     const result = await api<{ posts: Post[] }>("/api/posts?scope=" + scope);
@@ -127,6 +138,7 @@ export default function ZyvraClient() {
   const nav = [
     { id: "home", text: "Home", icon: Home },
     { id: "explore", text: "Explore", icon: Compass },
+    { id: "clips", text: "Clips", icon: Clapperboard },
     { id: "messages", text: "Messages", icon: MessageCircle },
     { id: "saved", text: "Saved", icon: Bookmark },
     { id: "profile", text: "Profile", icon: UserRound }
@@ -163,12 +175,22 @@ export default function ZyvraClient() {
   }
   async function createPost(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!postDraft.trim() || postBusy) return;
+    if ((!postDraft.trim() && !postMediaFile) || postBusy || !user) return;
     setPostBusy(true);
     try {
-      await api("/api/posts", "POST", { body: postDraft });
-      setPostDraft(""); setTab("home");
-      await refreshPosts(); notice("Your post is live ✦");
+      let mediaId = pendingMediaId;
+      if (postMediaFile && !mediaId) {
+        const uploaded = await sendMedia(postMediaFile, user.id, "posts");
+        mediaId = uploaded.id;
+        setPendingMediaId(uploaded.id);
+      }
+      const caption = postDraft.trim() || (postMediaFile?.type.startsWith("video/") ? "New clip ✦" : "A moment worth sharing ✦");
+      await api("/api/posts", "POST", { body: caption, ...(mediaId ? { mediaId } : {}) });
+      const isClip = postMediaFile?.type.startsWith("video/");
+      setPostDraft(""); setPostMediaFile(null); setPendingMediaId(null);
+      setTab(isClip ? "clips" : "home");
+      if (!isClip) await refreshPosts(feedScope);
+      notice(isClip ? "Your clip is live ✦" : "Your post is live ✦");
     } catch (error) { notice(error instanceof Error ? error.message : "Could not post"); }
     finally { setPostBusy(false); }
   }
@@ -289,32 +311,42 @@ export default function ZyvraClient() {
       <p className="side-caption">YOUR SPACE</p>
       <nav className="sidebar-nav" aria-label="Primary navigation">
         {nav.map(({ id, text, icon: Icon }) => <button key={id} type="button" onClick={() => go(id)} className={"nav-item " + (tab === id ? "active" : "")}><Icon size={21} /><span>{text}</span>{id === "messages" && conversations.length > 0 && <i>{conversations.length}</i>}</button>)}
-        <a className="nav-item" href="/preview/index.html" title="Design preview; stories and clips are demonstration-only"><Clapperboard size={21} /><span>Clips & Stories</span><ChevronRight size={16}/></a>
+        <a className="nav-item" href="/preview/index.html" title="Explore the original visual concept"><Sparkles size={21}/><span>Visual concept</span><ChevronRight size={16}/></a>
       </nav>
       <button type="button" className="primary-btn nav-compose" onClick={() => { go("home"); document.getElementById("post-textarea")?.focus(); }}><Plus size={20} />Create a post</button>
       <div className="sidebar-bottom"><div className="signed-in"><Avatar name={user.display_name} /><div className="signed-in-text"><strong>{user.display_name}</strong><span>@{user.handle}</span></div></div><button type="button" onClick={logout} className="icon-btn" aria-label="Sign out" title="Sign out"><LogOut size={19}/></button></div>
     </aside>
     {menuOpen && <button type="button" aria-label="Close navigation" className="menu-backdrop" onClick={() => setMenuOpen(false)} />}
     <main className="content">
-      <header className="content-header"><button type="button" className="mobile-menu icon-btn" onClick={() => setMenuOpen(true)} aria-label="Open navigation"><Menu size={22}/></button><div><span className="header-kicker">WELCOME TO ZYVRA</span><h2>{tab === "home" ? "Your feed" : tab === "explore" ? "Find your people" : tab === "messages" ? "Messages" : tab === "saved" ? "Saved posts" : "Your profile"}<span className="heading-dot">.</span></h2></div><span className="header-status"><span className="live-dot" /> Early access</span></header>
+      <header className="content-header"><button type="button" className="mobile-menu icon-btn" onClick={() => setMenuOpen(true)} aria-label="Open navigation"><Menu size={22}/></button><div><span className="header-kicker">WELCOME TO ZYVRA</span><h2>{tab === "home" ? "Your feed" : tab === "explore" ? "Find your people" : tab === "clips" ? "Clips" : tab === "messages" ? "Messages" : tab === "saved" ? "Saved posts" : "Your profile"}<span className="heading-dot">.</span></h2></div><span className="header-status"><span className="live-dot" /> Early access</span></header>
       {tab === "home" && <>
         <div className="feed-heading"><div><span className="section-eyebrow">THE LATEST</span><h3>What's happening<span className="heading-dot">?</span></h3></div><span className="subtle-tag"><Sparkles size={15} /> For you</span></div>
-        <form className="compose-card" onSubmit={createPost}><div className="compose-row"><Avatar name={user.display_name} /><textarea id="post-textarea" value={postDraft} onChange={e => setPostDraft(e.target.value)} maxLength={500} rows={3} placeholder="What's happening in your world?" aria-label="Write a post" /></div><div className="compose-footer"><span>Say it your way <span className="counter">{postDraft.length}/500</span></span><button type="submit" className="primary-btn small-btn" disabled={postBusy || !postDraft.trim()}>{postBusy ? "Posting..." : "Post"}<ArrowRight size={16}/></button></div></form>
+        <form className="compose-card" onSubmit={createPost}>
+          <div className="compose-row"><Avatar name={user.display_name} /><textarea id="post-textarea" value={postDraft} onChange={e => setPostDraft(e.target.value)} maxLength={500} rows={3} placeholder="What's happening in your world?" aria-label="Write a post" /></div>
+          {postMediaFile && <div className="media-selected">{postPreview ? <img src={postPreview} alt="Selected upload preview" /> : <Film size={27}/>}<div><strong>{postMediaFile.name}</strong><span>{postMediaFile.type.startsWith("video/") ? "Clip · max 25 MB" : "Photo · max 5 MB"}</span></div><button type="button" aria-label="Remove selected media" disabled={postBusy} onClick={() => {setPostMediaFile(null);setPendingMediaId(null);}}><X size={17}/></button></div>}
+          <div className="compose-footer">
+            <label className="compose-attach"><ImageIcon size={19}/><span>Add photo / video</span><input type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" aria-label="Choose photo or video" disabled={postBusy} onChange={e => { setPostMediaFile(e.target.files?.[0] ?? null);setPendingMediaId(null);e.target.value="";}} /></label>
+            <span className="compose-count">{postDraft.length}/500</span>
+            <button type="submit" className="primary-btn small-btn" disabled={postBusy || (!postDraft.trim()&&!postMediaFile)}>{postBusy ? (postMediaFile ? "Uploading..." : "Posting...") : postMediaFile?.type.startsWith("video/") ? "Share clip" : "Post"}<ArrowRight size={16}/></button>
+          </div>
+          <p className="compose-limit">JPEG, PNG, WebP (5 MB) or MP4/WebM (25 MB). Uploaded content is publicly accessible.</p>
+        </form>
         <Stories currentUserId={user.id} />
         <div className="stream-heading"><span><Zap size={18}/> Fresh on your feed</span><div className="feed-filters"><button type="button" className={feedScope === "all" ? "feed-scope-active" : ""} onClick={() => setFeedScope("all")}>Everyone</button><button type="button" className={feedScope === "following" ? "feed-scope-active" : ""} onClick={() => setFeedScope("following")}>Following</button><button type="button" aria-label="Refresh feed" onClick={() => void refreshPosts(feedScope).catch(() => notice("Could not refresh"))}>↻</button></div></div>
       </>}
+      {tab === "clips" && <ClipsFeed />}
       {tab === "profile" && <div className="profile-hero"><div className="profile-banner"><Zap size={55} fill="currentColor"/></div><div className="profile-detail"><Avatar name={user.display_name} size="large" /><span className="profile-label">FOUNDING MEMBER</span><h3>{user.display_name}</h3><span className="handle">@{user.handle}</span><p>{user.bio || "Express yourself. This is your space."}</p><div className="profile-stats"><strong>{myPosts.length}<span> Posts</span></strong><strong>✦<span> Early creator</span></strong></div></div><div className="posts-intro">Your posts</div></div>}
       {tab === "saved" && <div className="saved-header"><Bookmark size={23} /><div><span className="section-eyebrow">JUST FOR YOU</span><h3>Worth keeping.</h3><p>Only you can see your saved posts.</p></div></div>}
       {(tab === "home" || tab === "profile" || tab === "saved") && <div className="post-stream">
         {showPosts.length === 0 && <div className="empty"><Sparkles size={28}/><h3>Every story starts somewhere.</h3><p>Share the first thought on your feed.</p></div>}
-        {showPosts.map(post => <article key={post.id} className="post"><div className="post-top"><Avatar name={post.display_name}/><div className="post-ident"><strong>{post.display_name}</strong><div><span>@{post.handle}</span><span>·</span><span>{friendlyTime(post.created_at)}</span></div></div><MoreHorizontal size={19} className="post-more"/></div><p className="post-copy">{post.body}</p><div className="post-actions"><button type="button" aria-label="Like post" aria-pressed={post.liked} className={post.liked ? "is-liked" : ""} onClick={() => void toggleLike(post)}><Heart size={19} fill={post.liked ? "currentColor" : "none"}/><span>{post.like_count}</span></button><button type="button" onClick={() => void expandComments(post.id)} aria-expanded={expandedPostId === post.id}><MessageCircle size={19}/><span>{post.comment_count}</span></button><button type="button" onClick={() => void toggleBookmark(post)} className={post.bookmarked ? "is-saved" : ""} aria-pressed={post.bookmarked} aria-label={post.bookmarked ? "Unsave post" : "Save post"}><Bookmark size={19} fill={post.bookmarked ? "currentColor" : "none"}/></button><span className="post-spacer"/><span className="post-type">TEXT POST</span></div>
+        {showPosts.map(post => <article key={post.id} className="post"><div className="post-top"><Avatar name={post.display_name}/><div className="post-ident"><strong>{post.display_name}</strong><div><span>@{post.handle}</span><span>·</span><span>{friendlyTime(post.created_at)}</span></div></div><MoreHorizontal size={19} className="post-more"/></div><p className="post-copy">{post.body}</p>{post.media_url && <div className="feed-media">{post.media_kind === "video" ? <video controls playsInline preload="metadata" src={post.media_url} aria-label={"Video by "+post.display_name} /> : <img src={post.media_url} alt={"Photo shared by "+post.display_name} loading="lazy" />}</div>}<div className="post-actions"><button type="button" aria-label="Like post" aria-pressed={post.liked} className={post.liked ? "is-liked" : ""} onClick={() => void toggleLike(post)}><Heart size={19} fill={post.liked ? "currentColor" : "none"}/><span>{post.like_count}</span></button><button type="button" onClick={() => void expandComments(post.id)} aria-expanded={expandedPostId === post.id}><MessageCircle size={19}/><span>{post.comment_count}</span></button><button type="button" onClick={() => void toggleBookmark(post)} className={post.bookmarked ? "is-saved" : ""} aria-pressed={post.bookmarked} aria-label={post.bookmarked ? "Unsave post" : "Save post"}><Bookmark size={19} fill={post.bookmarked ? "currentColor" : "none"}/></button><span className="post-spacer"/><span className="post-type">{post.media_kind === "video" ? "CLIP" : post.media_kind === "image" ? "PHOTO" : "TEXT POST"}</span></div>
           {expandedPostId === post.id && <div className="comment-panel">{comments.map(comment => <div className="comment-item" key={comment.id}><Avatar name={comment.display_name} size="small"/><div><strong>{comment.display_name} <span>@{comment.handle}</span></strong><p>{comment.body}</p></div></div>)}{comments.length === 0 && <p className="no-comments">No replies yet. Start the conversation.</p>}<form className="comment-compose" onSubmit={e => void sendComment(e, post.id)}><input aria-label="Write a reply" placeholder="Reply to this post..." value={commentDraft} maxLength={300} onChange={e => setCommentDraft(e.target.value)}/><button type="submit" disabled={!commentDraft.trim()} aria-label="Send reply"><Send size={17}/></button></form></div>}
         </article>)}
       </div>}
       {tab === "explore" && <section className="explore-page"><div className="explore-card"><span className="section-eyebrow">COMMUNITY</span><h3>Good people. Great conversations.</h3><p>Search for another member and start a one-to-one conversation. Your messages are only visible to members of that chat.</p><form className="people-search" onSubmit={searchUsers}><Search size={20}/><input aria-label="Search users" autoComplete="off" placeholder="Search by name or @username" value={peopleQuery} onChange={e => setPeopleQuery(e.target.value)} maxLength={50}/><button type="submit" className="primary-btn small-btn" disabled={searchBusy || peopleQuery.trim().length < 2}>{searchBusy ? "Searching" : "Find"}</button></form>{people.map(person => <div className="person-result" key={person.id}><Avatar name={person.display_name}/><div><strong>{person.display_name}</strong><span>@{person.handle}</span></div><button type="button" className={person.following ? "person-following" : "person-follow"} onClick={() => void toggleFollow(person)}>{person.following ? <Check size={16}/> : <Plus size={16}/>} {person.following ? "Following" : "Follow"}</button><button type="button" disabled={working} onClick={() => void openConversation(person.id)}><MessageCircle size={17}/> Message</button></div>)}{people.length === 0 && <div className="search-hint"><Users size={24}/> Find your first connection</div>}</div><div className="coming-soon"><span className="section-eyebrow">COMING NEXT</span><h3>Discover even more.</h3><p>Trending topics, creators, and communities are on our roadmap.</p><a href="/preview/index.html">Experience the visual concept <ArrowRight size={16}/></a></div></section>}
       {tab === "messages" && <section className="message-page"><div className={"chat-list " + (conversationId ? "chat-list-mobile-hidden" : "")}><div className="chat-list-head"><h3>Inbox <span>{conversations.length}</span></h3><button type="button" aria-label="Find someone to message" title="New message" onClick={() => go("explore")}><Plus size={19}/></button></div>{conversations.length === 0 && <div className="chat-empty"><MessageCircle size={29}/><strong>Your inbox is ready.</strong><p>Find someone on Explore to send the first message.</p><button type="button" onClick={() => go("explore")}>Find people <ArrowRight size={15}/></button></div>}{conversations.map(c => <button key={c.id} type="button" className={"chat-item " + (conversationId === c.id ? "chat-selected" : "")} onClick={() => setConversationId(c.id)}><Avatar name={c.display_name}/><div><strong>{c.display_name}</strong><span>{c.last_message || "Start the conversation"}</span></div><small>{friendlyTime(c.last_at)}</small></button>)}</div><div className={"chat-panel " + (!conversationId ? "chat-panel-mobile-hidden" : "")}>{currentConversation && conversationId ? <><div className="chat-header"><button type="button" className="chat-back" aria-label="Return to chats" onClick={() => setConversationId(null)}><ArrowLeft size={20}/></button><Avatar name={currentConversation.display_name}/><div><strong>{currentConversation.display_name}</strong><span>@{currentConversation.handle} · Private conversation</span></div><LockKeyhole size={18} className="chat-lock"/></div><div className="chat-messages" aria-live="polite">{messages.length === 0 && <div className="first-message"><Sparkles size={28}/><h4>Say hello.</h4><p>A great connection starts with one message.</p></div>}{messages.map(message => <div key={message.id} className={"bubble-line " + (message.sender_id === user.id ? "mine" : "")}><div className="bubble"><p>{message.body}</p><small>{friendlyTime(message.created_at)} {message.sender_id === user.id && <Check size={12}/>}</small></div></div>)}</div><form className="chat-compose" onSubmit={submitMessage}><input aria-label="Write a message" placeholder="Write a message..." value={messageDraft} onChange={e => setMessageDraft(e.target.value)} maxLength={2000}/><button type="submit" disabled={messageBusy || !messageDraft.trim()} aria-label="Send message"><Send size={19}/></button></form></> : <div className="chat-placeholder"><span><MessageCircle size={35}/></span><h3>Your conversations start here.</h3><p>Select a chat or find someone to connect with.</p><button className="primary-btn small-btn" type="button" onClick={() => go("explore")}>Find people <ArrowRight size={16}/></button></div>}</div></section>}
     </main>
-    <aside className="right-sidebar"><div className="right-card right-welcome"><div className="right-topline"><span className="live-dot"/> YOUR SOCIAL UNIVERSE</div><div className="right-icon"><Sparkles size={25}/></div><h3>Better together.</h3><p>New thoughts, new friends and a thousand reasons to connect.</p><button type="button" onClick={() => go("explore")}>Explore the community <ArrowRight size={16}/></button></div><div className="right-card"><div className="right-label"><span>INSIDE ZYVRA</span><span>✦</span></div><div className="feature-info"><Heart size={18}/><span>Connect through posts</span><Check size={15}/></div><div className="feature-info"><MessageCircle size={18}/><span>Chat privately</span><Check size={15}/></div><div className="feature-info"><Sparkles size={18}/><span>24-hour text stories</span><Check size={15}/></div><div className="feature-info"><Clapperboard size={18}/><span>Video clips</span><span className="soon">SOON</span></div><div className="feature-info"><Bell size={18}/><span>Notifications</span><span className="soon">SOON</span></div></div><div className="right-footer">ZYVRA © 2026 <span>·</span> Built for connection.</div></aside>
+    <aside className="right-sidebar"><div className="right-card right-welcome"><div className="right-topline"><span className="live-dot"/> YOUR SOCIAL UNIVERSE</div><div className="right-icon"><Sparkles size={25}/></div><h3>Better together.</h3><p>New thoughts, new friends and a thousand reasons to connect.</p><button type="button" onClick={() => go("explore")}>Explore the community <ArrowRight size={16}/></button></div><div className="right-card"><div className="right-label"><span>INSIDE ZYVRA</span><span>✦</span></div><div className="feature-info"><Heart size={18}/><span>Connect through posts</span><Check size={15}/></div><div className="feature-info"><MessageCircle size={18}/><span>Chat privately</span><Check size={15}/></div><div className="feature-info"><Sparkles size={18}/><span>24-hour stories</span><Check size={15}/></div><div className="feature-info"><Clapperboard size={18}/><span>Photo & video posts</span><Check size={15}/></div><div className="feature-info"><Bell size={18}/><span>Notifications</span><span className="soon">SOON</span></div></div><div className="right-footer">ZYVRA © 2026 <span>·</span> Built for connection.</div></aside>
     <nav className="mobile-bottom" aria-label="Mobile navigation">{nav.map(({id,icon:Icon,text}) => <button type="button" key={id} onClick={() => go(id)} className={tab === id ? "active" : ""} aria-label={text}><Icon size={22}/><span>{text}</span></button>)}</nav>
     {toast && <div className="toast" role="status">{toast}<button type="button" aria-label="Dismiss notification" onClick={() => setToast("")}><X size={15}/></button></div>}
   </div>;
