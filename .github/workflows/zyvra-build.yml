@@ -48,5 +48,5 @@ jobs:
         run: npm test
       - name: Build Next.js
         run: npm run build
-      - name: Exercise two-account social and messaging flows (isolated PostgreSQL)
+      - name: Exercise verification, moderation, privacy and messaging (isolated PostgreSQL)
         run: npm run test:integration
