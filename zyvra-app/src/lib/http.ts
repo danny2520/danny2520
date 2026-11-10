@@ -6,7 +6,21 @@ export class ApiError extends Error {
 
 export function assertSameOrigin(request: NextRequest): void {
   const origin = request.headers.get("origin");
-  if (origin && origin !== new URL(request.url).origin) throw new ApiError(403, "Invalid request origin");
+  if (!origin) return;
+  // Next.js may construct request.url from an internal host behind a proxy.
+  // Host represents the browser-facing request target. Browsers cannot set it
+  // independently from the URL they are requesting.
+  const host = request.headers.get("host") ?? new URL(request.url).host;
+  let source: URL;
+  try { source = new URL(origin); }
+  catch { throw new ApiError(403, "Invalid request origin"); }
+  if (source.host.toLowerCase() !== host.toLowerCase()) {
+    throw new ApiError(403, "Invalid request origin");
+  }
+  const local = source.hostname === "localhost" || source.hostname === "127.0.0.1";
+  if (source.protocol !== "https:" && !(source.protocol === "http:" && local)) {
+    throw new ApiError(403, "Invalid request origin");
+  }
 }
 
 export async function payload(request: NextRequest): Promise<Record<string, unknown>> {
