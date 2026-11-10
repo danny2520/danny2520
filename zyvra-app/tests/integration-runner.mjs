@@ -27,7 +27,9 @@ test("three isolated accounts: authentication, posts, following, private saved p
     for(const file of ["001_initial.sql","002_social_graph_and_stories.sql"]){
       await pool.query(readFileSync(join(root,"db",file),"utf8"));
     }
-    server=spawn("npm",["run","start","--","-p","3317"],{
+    // Run the Next.js server directly: launching through npm can orphan a child
+    // process and leave the CI runner alive after tests finish.
+    server=spawn(process.execPath,[join(root,"node_modules","next","dist","bin","next"),"start","-p","3317"],{
       cwd:root,
       env:{...process.env,PORT:"3317"},
       stdio:["ignore","pipe","pipe"]
@@ -126,6 +128,8 @@ test("three isolated accounts: authentication, posts, following, private saved p
     console.log("PASS: accounts, posting, comments, likes, follows, private bookmarks, 24h stories, 2-way chat and access control");
   } finally {
     if(server?.pid)server.kill("SIGTERM");
+    server?.stdout?.destroy();
+    server?.stderr?.destroy();
     await pool.end();
   }
 });
