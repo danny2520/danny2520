@@ -232,7 +232,11 @@ test("four isolated accounts: verification, moderation, blocking, privacy, delet
       method:"POST",cookie:mod.cookie,body:{action:"suspend_user",reason:"Confirmed abuse"}
     })).status,200);
     assert.equal((await send("/api/posts",{cookie:eve.cookie})).status,401);
-    assert.equal((await send("/api/auth/login",{method:"POST",body:{handle:"eve_ci",password:"StrongCiPassword01234!"}})).status,403);
+    const limited=await send("/api/auth/login",{method:"POST",body:{handle:"eve_ci",password:"StrongCiPassword01234!"}});
+    assert.equal(limited.status,200,"Suspended members may access account settings only");
+    assert.equal((await send("/api/posts",{cookie:limited.cookie})).status,403);
+    assert.equal((await send("/api/account/delete",{method:"POST",cookie:limited.cookie,
+      body:{password:"StrongCiPassword01234!",confirm:"DELETE"}})).status,200);
 
     // Account deletion erases profile & attached media metadata, and retains
     // only the Blob cleanup outbox. The actual Blob deletion is a separate step.

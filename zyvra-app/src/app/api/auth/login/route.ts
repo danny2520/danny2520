@@ -20,7 +20,8 @@ export async function POST(request:NextRequest){
   const fallback="$2a$12$C6UzMDM.H6dfI/f/IKcEeOABY3N9snVb2oLaAVJpYM5GLiTddPu2G";
   const valid=await compare(password,users[0]?.password_hash??fallback);
   if(!users[0]||!valid)throw new ApiError(401,"Incorrect username or password");
-  if(users[0].account_state!=="active")throw new ApiError(403,"This account is suspended");
+  // Suspended members can sign in to a restricted settings-only session
+  // to delete their account. All social endpoints reject suspended users.
   const {password_hash:_ignored,...raw}=users[0];
   const user:User={...raw,moderator:isModeratorEmail(raw.email,raw.verified)};
   const response=NextResponse.json({user});
