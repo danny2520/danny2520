@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { sql } from "./db";
+import { sql, transaction } from "./db";
 import { ApiError } from "./http";
 
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
@@ -65,11 +65,16 @@ export async function sendVerificationEmail(userId:string,email:string):Promise<
 }
 export async function redeemVerificationToken(token:string):Promise<void>{
   if(!/^[A-Za-z0-9_-]{40,90}$/.test(token))throw new ApiError(400,"Invalid verification link");
-  const rows=await sql<{user_id:string}>(
-    "DELETE FROM zyvra_email_tokens WHERE token_hash=$1 AND expires_at>now() RETURNING user_id",
-    [tokenHash(token)]
-  );
-  if(!rows.length)throw new ApiError(400,"Verification link expired or already used");
-  await sql("UPDATE zyvra_users SET email_verified_at=COALESCE(email_verified_at,now()) WHERE id=$1",[rows[0].user_id]);
-  await sql("DELETE FROM zyvra_email_tokens WHERE user_id=$1",[rows[0].user_id]);
+  await transaction(async client=>{
+    const tokens=await client.query<{user_id:string}>(
+      "DELETE FROM zyvra_email_tokens WHERE token_hash=$1 AND expires_at>now() RETURNING user_id",
+      [tokenHash(token)]
+    );
+    if(!tokens.rowCount)throw new ApiError(400,"Verification link expired or already used");
+    await client.query(
+      "UPDATE zyvra_users SET email_verified_at=COALESCE(email_verified_at,now()) WHERE id=$1",
+      [tokens.rows[0].user_id]
+    );
+    await client.query("DELETE FROM zyvra_email_tokens WHERE user_id=$1",[tokens.rows[0].user_id]);
+  });
 }

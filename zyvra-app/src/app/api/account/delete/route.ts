@@ -1,6 +1,6 @@
 import { compare } from "bcryptjs";
 import { NextRequest,NextResponse } from "next/server";
-import { requiredSignedInUser,endSession,checkAuthRateLimit } from "@/lib/auth";
+import { currentUser,endSession,checkAuthRateLimit } from "@/lib/auth";
 import { sql,transaction } from "@/lib/db";
 import { processCleanup } from "@/lib/cleanup";
 import { ApiError,asRoute,assertSameOrigin,inputText,payload } from "@/lib/http";
@@ -8,7 +8,9 @@ import { ApiError,asRoute,assertSameOrigin,inputText,payload } from "@/lib/http"
 export async function POST(request:NextRequest){
  return asRoute(async()=>{
   assertSameOrigin(request);
-  const me=await requiredSignedInUser(),data=await payload(request);
+  const me=await currentUser();
+  if(!me)throw new ApiError(401,"Please sign in");
+  const data=await payload(request);
   const confirm=inputText(data.confirm,"Confirmation",6,6);
   if(confirm!=="DELETE")throw new ApiError(400,"Type DELETE to confirm");
   const password=inputText(data.password,"Current password",1,72);

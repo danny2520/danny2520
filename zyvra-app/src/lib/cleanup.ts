@@ -73,6 +73,9 @@ export async function runMediaMaintenance():Promise<CleanupResult>{
  const result=await processCleanup(20);
  // Keep the queue small without keeping completed public object URLs forever.
  await sql("DELETE FROM zyvra_media_cleanup WHERE completed_at<now()-interval '30 days'");
+ await sql("DELETE FROM zyvra_email_tokens WHERE expires_at<now()-interval '7 days'");
+ await sql("DELETE FROM zyvra_auth_attempts WHERE created_at<now()-interval '7 days'");
+ await sql("DELETE FROM zyvra_media_grants WHERE created_at<now()-interval '7 days'");
  return {queued,deleted:result.deleted,failed:result.failed,
   expiredStories:expired.length,prunedMedia:unused.length};
 }
