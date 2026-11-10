@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
 import pg from "pg";
+import { createServer } from "node:http";
 
 const here=dirname(fileURLToPath(import.meta.url));
 const root=join(here,"..");
@@ -17,21 +18,35 @@ async function send(path,{method="GET",body,cookie,origin=base}={}){
   return {status:response.status,body:content,cookie:(response.headers.get("set-cookie")??"").split(";")[0]};
 }
 
-test("three isolated accounts: authentication, posts, following, private saved posts, expiring stories and two-way DMs", {timeout:90000}, async () => {
+test("four isolated accounts: verification, moderation, blocking, privacy, deletion and media cleanup", {timeout:90000}, async () => {
   assert.ok(process.env.DATABASE_URL?.includes("127.0.0.1"),"Tests MUST use the disposable localhost CI database, never Neon");
   assert.ok(process.env.DATABASE_URL?.endsWith("/zyvra_ci"),"Unsafe database name");
   const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:2});
   let server=null;
+  let mailServer=null;
+  const delivered=[];
   let output="";
   try{
-    for(const file of ["001_initial.sql","002_social_graph_and_stories.sql","003_media.sql"]){
+    for(const file of ["001_initial.sql","002_social_graph_and_stories.sql","003_media.sql","004_trust_safety_cleanup.sql","005_media_orphan_scan.sql"]){
       await pool.query(readFileSync(join(root,"db",file),"utf8"));
     }
+    mailServer=createServer((req,res)=>{
+      const parts=[];
+      req.on("data",chunk=>parts.push(chunk));
+      req.on("end",()=>{
+        try{delivered.push(JSON.parse(Buffer.concat(parts).toString("utf8")));res.writeHead(200,{"Content-Type":"application/json"});res.end('{"id":"mock-mail"}');}
+        catch{res.writeHead(400);res.end();}
+      });
+    });
+    await new Promise(resolve=>mailServer.listen(3318,"127.0.0.1",resolve));
     // Run the Next.js server directly: launching through npm can orphan a child
     // process and leave the CI runner alive after tests finish.
     server=spawn(process.execPath,[join(root,"node_modules","next","dist","bin","next"),"start","-p","3317"],{
       cwd:root,
-      env:{...process.env,PORT:"3317"},
+      env:{...process.env,PORT:"3317",CI:"true",RESEND_API_KEY:"ci-mock-only",
+        ZYVRA_FROM_EMAIL:"no-reply@zyvra.test",ZYVRA_SITE_URL:base,
+        ZYVRA_CI_MAIL_URL:"http://127.0.0.1:3318/mail",
+        ZYVRA_MODERATOR_EMAILS:"mod_ci@zyvra.test"},
       stdio:["ignore","pipe","pipe"]
     });
     server.stdout.on("data",d=>output=(output+String(d)).slice(-6000));
@@ -54,14 +69,27 @@ test("three isolated accounts: authentication, posts, following, private saved p
     assert.equal(unauth.status,401);
 
     const register=async(name,handle)=>{
-      const r=await send("/api/auth/register",{method:"POST",body:{displayName:name,handle,password:"StrongCiPassword01234!"}});
+      const email=handle+"@zyvra.test";
+      const r=await send("/api/auth/register",{method:"POST",body:{
+        displayName:name,handle,email,password:"StrongCiPassword01234!"
+      }});
       assert.equal(r.status,201,JSON.stringify(r.body));
+      assert.equal(r.body.user.verified,false);
       assert.match(r.cookie,/^zyvra_session=/);
-      return {user:r.body.user,cookie:r.cookie};
+      assert.equal((await send("/api/posts",{cookie:r.cookie})).status,403,"Unverified accounts must be gated");
+      const html=delivered.at(-1)?.html;
+      const token=html?.match(/\/verify\?token=([A-Za-z0-9_-]+)/)?.[1];
+      assert.ok(token,"Verification message did not contain a token");
+      const verify=await send("/api/auth/verify",{method:"POST",body:{token}});
+      assert.equal(verify.status,200,JSON.stringify(verify.body));
+      assert.equal((await send("/api/me",{cookie:r.cookie})).body.user.verified,true);
+      assert.equal((await send("/api/auth/verify",{method:"POST",body:{token}})).status,400,"Tokens are single use");
+      return {user:r.body.user,cookie:r.cookie,email};
     };
     const alice=await register("Alice Studio","alice_ci");
     const bob=await register("Bob Maker","bob_ci");
     const eve=await register("Eve Viewer","eve_ci");
+    const mod=await register("Safety Moderator","mod_ci");
 
     // Post by Alice; Bob can see it but cannot impersonate Alice.
     const posted=await send("/api/posts",{method:"POST",cookie:alice.cookie,body:{body:"Hello from Alice!"}});
@@ -166,14 +194,63 @@ test("three isolated accounts: authentication, posts, following, private saved p
     assert.equal((await send("/api/conversations/"+threadId+"/messages",{cookie:eve.cookie})).status,404);
     assert.equal((await send("/api/conversations/"+threadId+"/messages",{method:"POST",cookie:eve.cookie,body:{body:"I should not get in!"}})).status,404);
     assert.equal((await send("/api/conversations/"+threadId+"/messages")).status,401);
-    // Server-side logout invalidates existing bearer cookies immediately.
-    assert.equal((await send("/api/auth/logout",{method:"POST",cookie:alice.cookie})).status,200);
+    // Blocking is enforced for search, feed and existing conversations.
+    assert.equal((await send("/api/users/"+alice.user.id+"/block",{method:"POST",cookie:bob.cookie})).status,200);
+    assert.equal((await send("/api/users?q=alice",{cookie:bob.cookie})).body.users.length,0);
+    assert.equal((await send("/api/conversations/"+threadId+"/messages",{cookie:bob.cookie})).status,404);
+    assert.equal((await send("/api/conversations/"+threadId+"/messages",{method:"POST",cookie:bob.cookie,body:{body:"should be blocked"}})).status,404);
+    assert.equal((await send("/api/users/"+alice.user.id+"/block",{method:"DELETE",cookie:bob.cookie})).status,200);
+    assert.equal((await send("/api/conversations/"+threadId+"/messages",{cookie:bob.cookie})).status,200);
+
+    // Reports must be visible only to verified moderators; reviews are audited.
+    const flagged=await send("/api/posts",{method:"POST",cookie:bob.cookie,body:{body:"Post for moderation test"}});
+    assert.equal(flagged.status,201,JSON.stringify(flagged.body));
+    const reported=await send("/api/reports",{method:"POST",cookie:alice.cookie,
+      body:{targetKind:"post",targetId:flagged.body.id,reason:"spam",details:"Example spam"}});
+    assert.equal(reported.status,201,JSON.stringify(reported.body));
+    assert.equal((await send("/api/moderation/reports",{cookie:bob.cookie})).status,403);
+    const queue=await send("/api/moderation/reports",{cookie:mod.cookie});
+    assert.equal(queue.status,200,JSON.stringify(queue.body));
+    const item=queue.body.reports.find(r=>r.target_id===flagged.body.id);
+    assert.ok(item,"Missing reported post");
+    const hide=await send("/api/moderation/reports/"+item.id,{
+      method:"POST",cookie:mod.cookie,body:{action:"hide_post",reason:"Spam confirmed"}});
+    assert.equal(hide.status,200,JSON.stringify(hide.body));
+    assert.ok(!(await send("/api/posts",{cookie:alice.cookie})).body.posts.some(p=>p.id===flagged.body.id));
+    assert.equal((await send("/api/posts/"+flagged.body.id+"/comments",{cookie:alice.cookie})).status,404);
+    const audits=await pool.query("SELECT action FROM zyvra_moderation_log WHERE target_id=$1",[flagged.body.id]);
+    assert.equal(audits.rows[0].action,"hide_post");
+
+    // Moderator can suspend a reported user; their existing session is revoked.
+    const userReport=await send("/api/reports",{method:"POST",cookie:bob.cookie,
+      body:{targetKind:"user",targetId:eve.user.id,reason:"harassment"}});
+    assert.equal(userReport.status,201);
+    const open=await send("/api/moderation/reports",{cookie:mod.cookie});
+    const userItem=open.body.reports.find(r=>r.target_id===eve.user.id);
+    assert.ok(userItem);
+    assert.equal((await send("/api/moderation/reports/"+userItem.id,{
+      method:"POST",cookie:mod.cookie,body:{action:"suspend_user",reason:"Confirmed abuse"}
+    })).status,200);
+    assert.equal((await send("/api/posts",{cookie:eve.cookie})).status,401);
+    assert.equal((await send("/api/auth/login",{method:"POST",body:{handle:"eve_ci",password:"StrongCiPassword01234!"}})).status,403);
+
+    // Account deletion erases profile & attached media metadata, and retains
+    // only the Blob cleanup outbox. The actual Blob deletion is a separate step.
+    const deletion=await send("/api/account/delete",{method:"POST",cookie:alice.cookie,
+      body:{password:"StrongCiPassword01234!",confirm:"DELETE"}});
+    assert.equal(deletion.status,200,JSON.stringify(deletion.body));
     assert.equal((await send("/api/posts",{cookie:alice.cookie})).status,401);
-    console.log("PASS: accounts, posting, media ownership, Clips, comments, likes, follows, private bookmarks, stories, 2-way chat and access control");
+    const aliceExists=await pool.query("SELECT id FROM zyvra_users WHERE id=$1",[alice.user.id]);
+    assert.equal(aliceExists.rows.length,0);
+    const mediaJob=await pool.query("SELECT url FROM zyvra_media_cleanup WHERE url=$1",["https://example.invalid/alice-photo.jpg"]);
+    assert.equal(mediaJob.rows.length,1,"Cascaded account deletion must queue media cleanup");
+    assert.equal((await send("/api/maintenance/cleanup")).status,503,"Cron must fail closed when unconfigured");
+    console.log("PASS: email verification, account flows, media ownership, reports, moderator actions, blocking, account erasure and Blob outbox");
   } finally {
     if(server?.pid)server.kill("SIGTERM");
     server?.stdout?.destroy();
     server?.stderr?.destroy();
+    if(mailServer) await new Promise(resolve=>mailServer.close(resolve));
     await pool.end();
   }
 });
