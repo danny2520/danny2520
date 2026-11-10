@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import "../components/stories.css";
 import "../components/clips.css";
+import "../components/trust.css";
 
 export const metadata: Metadata = {
   title: "ZYVRA — Your people. Your pulse.",
