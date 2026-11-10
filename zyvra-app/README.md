@@ -18,7 +18,10 @@
    - cp .env.example .env.local
    - Fill in DATABASE_URL and a randomly generated AUTH_SECRET (at least 32 characters) in .env.local
 3. Apply the **non-destructive, initial schema** once to your dedicated dev database:
+   - First load DATABASE_URL into your terminal from .env.local (the Next.js dev server loads .env.local automatically, but psql does not):
+   - export DATABASE_URL="$(sed -n 's/^DATABASE_URL=//p' .env.local | sed 's/^"//;s/"$//')"
    - psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/001_initial.sql
+   - unset DATABASE_URL
    - If psql isn't present: sudo apt install postgresql-client
 4. Run:
    - npm run typecheck
