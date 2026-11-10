@@ -120,8 +120,12 @@ test("three isolated accounts: authentication, posts, following, private saved p
     assert.equal(gallery.body.posts.find(p=>p.id===photoPost.body.id).media_kind,"image");
     assert.equal(gallery.body.posts.find(p=>p.id===photoPost.body.id).media_url,"https://example.invalid/alice-photo.jpg");
     // Even direct database writes cannot attach Alice's media to Bob's post.
+    const unused=await pool.query(
+      "INSERT INTO zyvra_media(owner_id,url,pathname,kind,content_type,size_bytes) VALUES($1,$2,$3,'image','image/jpeg',12000) RETURNING id",
+      [alice.user.id,"https://example.invalid/second-photo.jpg","zyvra/"+alice.user.id+"/posts/second-001.jpg"]
+    );
     await assert.rejects(
-      pool.query("INSERT INTO zyvra_posts(author_id,body,media_id) VALUES($1,'cross-owner',$2)",[bob.user.id,photoId]),
+      pool.query("INSERT INTO zyvra_posts(author_id,body,media_id) VALUES($1,'cross-owner',$2)",[bob.user.id,unused.rows[0].id]),
       error=>error.code==="23503"
     );
     const video=await pool.query(
